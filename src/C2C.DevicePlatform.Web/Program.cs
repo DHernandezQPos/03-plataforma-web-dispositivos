@@ -24,13 +24,35 @@ builder.Services.AddHttpClient("DevicePlatformApi", (serviceProvider, client) =>
 });
 builder.Services.AddScoped<DeviceAdminApiClient>();
 
+var allowMissingEnvironmentClaim = builder.Configuration.GetValue<bool>("Authorization:AllowMissingEnvironmentClaim", false);
+var defaultEnvironment = builder.Configuration.GetValue<string>("Authorization:DefaultEnvironment") ?? "demo";
+
+bool HasAllowedEnvironment(System.Security.Claims.ClaimsPrincipal user)
+{
+    var envClaim = user.FindFirst("env")?.Value
+        ?? user.FindFirst("environment")?.Value;
+
+    if (string.IsNullOrWhiteSpace(envClaim) && allowMissingEnvironmentClaim)
+    {
+        envClaim = defaultEnvironment;
+    }
+
+    return envClaim is not null
+        && (envClaim.Equals("demo", StringComparison.OrdinalIgnoreCase)
+            || envClaim.Equals("qa", StringComparison.OrdinalIgnoreCase)
+            || envClaim.Equals("prod", StringComparison.OrdinalIgnoreCase));
+}
+
 builder.Services
     .AddAuthentication(options =>
     {
         options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
         options.DefaultChallengeScheme = OpenIdConnectDefaults.AuthenticationScheme;
     })
-    .AddCookie()
+    .AddCookie(options =>
+    {
+        options.AccessDeniedPath = "/not-found";
+    })
     .AddOpenIdConnect(options =>
     {
         var oidc = builder.Configuration.GetSection("Authentication:Oidc");
@@ -51,32 +73,14 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy("PlatformViewer", policy =>
     {
         policy.RequireAuthenticatedUser();
-        policy.RequireAssertion(context =>
-        {
-            var envClaim = context.User.FindFirst("env")?.Value
-                ?? context.User.FindFirst("environment")?.Value;
-
-            return envClaim is not null
-                && (envClaim.Equals("demo", StringComparison.OrdinalIgnoreCase)
-                    || envClaim.Equals("qa", StringComparison.OrdinalIgnoreCase)
-                    || envClaim.Equals("prod", StringComparison.OrdinalIgnoreCase));
-        });
+        policy.RequireAssertion(context => HasAllowedEnvironment(context.User));
     });
 
     options.AddPolicy("PlatformOperator", policy =>
     {
         policy.RequireAuthenticatedUser();
         policy.RequireRole("PlatformAdmin", "OpsAdmin");
-        policy.RequireAssertion(context =>
-        {
-            var envClaim = context.User.FindFirst("env")?.Value
-                ?? context.User.FindFirst("environment")?.Value;
-
-            return envClaim is not null
-                && (envClaim.Equals("demo", StringComparison.OrdinalIgnoreCase)
-                    || envClaim.Equals("qa", StringComparison.OrdinalIgnoreCase)
-                    || envClaim.Equals("prod", StringComparison.OrdinalIgnoreCase));
-        });
+        policy.RequireAssertion(context => HasAllowedEnvironment(context.User));
     });
 
     options.AddPolicy("AdminMfa", policy =>

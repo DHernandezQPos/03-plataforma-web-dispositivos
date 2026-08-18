@@ -322,6 +322,12 @@ public sealed class DeviceAdminApiClient(IHttpClientFactory httpClientFactory, I
         }
 
         var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(errorBody)
+            && response.Headers.WwwAuthenticate.Count > 0)
+        {
+            errorBody = string.Join(" | ", response.Headers.WwwAuthenticate.Select(value => value.ToString()));
+        }
+
         throw new InvalidOperationException(
             $"Device API call failed ({(int)response.StatusCode} {response.StatusCode}): {errorBody}");
     }

@@ -26,6 +26,7 @@ builder.Services.AddScoped<DeviceAdminApiClient>();
 
 var allowMissingEnvironmentClaim = builder.Configuration.GetValue<bool>("Authorization:AllowMissingEnvironmentClaim", false);
 var defaultEnvironment = builder.Configuration.GetValue<string>("Authorization:DefaultEnvironment") ?? "demo";
+var apiScope = builder.Configuration.GetValue<string>("Authentication:Oidc:ApiScope");
 
 bool HasAllowedEnvironment(System.Security.Claims.ClaimsPrincipal user)
 {
@@ -65,6 +66,10 @@ builder.Services
         options.Scope.Clear();
         options.Scope.Add("openid");
         options.Scope.Add("profile");
+        if (!string.IsNullOrWhiteSpace(apiScope))
+        {
+            options.Scope.Add(apiScope);
+        }
         options.TokenValidationParameters.RoleClaimType = "role";
     });
 

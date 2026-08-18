@@ -38,18 +38,21 @@ var apiScope = builder.Configuration.GetValue<string>("Authentication:Oidc:ApiSc
 
 bool HasAllowedEnvironment(System.Security.Claims.ClaimsPrincipal user)
 {
-    var envClaim = user.FindFirst("env")?.Value
-        ?? user.FindFirst("environment")?.Value;
+    var allowedEnvironments = user.FindAll("env").Select(claim => claim.Value)
+        .Concat(user.FindAll("environment").Select(claim => claim.Value))
+        .SelectMany(value => value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        .Where(value => !string.IsNullOrWhiteSpace(value))
+        .Select(value => value.Trim().ToLowerInvariant())
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-    if (string.IsNullOrWhiteSpace(envClaim) && allowMissingEnvironmentClaim)
+    if (allowedEnvironments.Count == 0 && allowMissingEnvironmentClaim)
     {
-        envClaim = defaultEnvironment;
+        allowedEnvironments.Add(defaultEnvironment.Trim().ToLowerInvariant());
     }
 
-    return envClaim is not null
-        && (envClaim.Equals("demo", StringComparison.OrdinalIgnoreCase)
-            || envClaim.Equals("qa", StringComparison.OrdinalIgnoreCase)
-            || envClaim.Equals("prod", StringComparison.OrdinalIgnoreCase));
+    return allowedEnvironments.Contains("demo")
+        || allowedEnvironments.Contains("qa")
+        || allowedEnvironments.Contains("prod");
 }
 
 builder.Services
@@ -161,7 +164,6 @@ app.MapGet("/logout", async context =>
 });
 
 app.MapRazorComponents<App>()
-    .AddInteractiveServerRenderMode()
-    .RequireAuthorization("PlatformViewer");
+    .AddInteractiveServerRenderMode();
 
 app.Run();

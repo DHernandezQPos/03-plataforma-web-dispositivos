@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="../tests/C2C.DevicePlatform.Tests/C2C.DevicePlatform.Tests.csproj" />
+  <Project Path="C2C.DevicePlatform.Api/C2C.DevicePlatform.Api.csproj" />
+  <Project Path="C2C.DevicePlatform.Application/C2C.DevicePlatform.Application.csproj" />
+  <Project Path="C2C.DevicePlatform.Domain/C2C.DevicePlatform.Domain.csproj" />
+  <Project Path="C2C.DevicePlatform.Infrastructure/C2C.DevicePlatform.Infrastructure.csproj" />
+  <Project Path="C2C.DevicePlatform.Web/C2C.DevicePlatform.Web.csproj" />
+</Solution>

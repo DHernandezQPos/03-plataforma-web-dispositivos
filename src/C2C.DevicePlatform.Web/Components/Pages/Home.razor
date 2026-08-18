@@ -1,0 +1,209 @@
+﻿@page "/"
+@using System.Text
+@using C2C.DevicePlatform.Web.Api
+@using Microsoft.AspNetCore.Authorization
+@attribute [Authorize(Policy = "PlatformViewer")]
+@inject DeviceAdminApiClient DeviceApiClient
+
+<PageTitle>Operations Dashboard</PageTitle>
+
+<h1>Operations Dashboard</h1>
+<p class="text-secondary">Environment health, alerts and high-volume CSV exports.</p>
+
+@if (!string.IsNullOrWhiteSpace(ErrorMessage))
+{
+	<div class="alert alert-danger" role="alert">@ErrorMessage</div>
+}
+
+@if (!string.IsNullOrWhiteSpace(SuccessMessage))
+{
+	<div class="alert alert-success" role="alert">@SuccessMessage</div>
+}
+
+<div class="card shadow-sm mb-4">
+	<div class="card-header">Environment dashboard</div>
+	<div class="card-body">
+		<div class="d-flex gap-2 align-items-center mb-3 flex-wrap">
+			<InputSelect class="form-select form-select-sm env-select" @bind-Value="SelectedEnvironment">
+				@foreach (var environment in Environments)
+				{
+					<option value="@environment">@environment</option>
+				}
+			</InputSelect>
+			<button class="btn btn-outline-secondary btn-sm" @onclick="LoadDashboardAsync" disabled="@IsBusy">Refresh dashboard</button>
+		</div>
+
+		@if (Dashboard is null)
+		{
+			<p class="mb-0">Select an environment and load dashboard metrics.</p>
+		}
+		else
+		{
+			<div class="row g-2">
+				<div class="col-6 col-lg-2"><div class="metric-box"><span>Total</span><strong>@Dashboard.TotalDevices</strong></div></div>
+				<div class="col-6 col-lg-2"><div class="metric-box metric-online"><span>Online</span><strong>@Dashboard.OnlineDevices</strong></div></div>
+				<div class="col-6 col-lg-2"><div class="metric-box metric-offline"><span>Offline</span><strong>@Dashboard.OfflineDevices</strong></div></div>
+				<div class="col-6 col-lg-2"><div class="metric-box metric-maint"><span>Maintenance</span><strong>@Dashboard.MaintenanceDevices</strong></div></div>
+				<div class="col-6 col-lg-2"><div class="metric-box metric-alert"><span>Alerts</span><strong>@Dashboard.AlertCount</strong></div></div>
+				<div class="col-6 col-lg-2"><div class="metric-box"><span>Last Activity</span><strong>@FormatUtc(Dashboard.LastActivityUtc)</strong></div></div>
+			</div>
+		}
+	</div>
+</div>
+
+<div class="card shadow-sm">
+	<div class="card-header">Asynchronous export</div>
+	<div class="card-body">
+		<div class="row g-2 align-items-end mb-3">
+			<div class="col-md-3">
+				<label class="form-label">Environment</label>
+				<InputSelect class="form-select" @bind-Value="ExportEnvironment">
+					@foreach (var environment in Environments)
+					{
+						<option value="@environment">@environment</option>
+					}
+				</InputSelect>
+			</div>
+			<div class="col-md-3">
+				<label class="form-label">Status (optional)</label>
+				<InputSelect class="form-select" @bind-Value="ExportStatus">
+					@foreach (var status in ExportStatuses)
+					{
+						<option value="@status">@status</option>
+					}
+				</InputSelect>
+			</div>
+			<div class="col-md-6 d-flex gap-2">
+				<button class="btn btn-primary" @onclick="StartExportAsync" disabled="@IsBusy">Start export job</button>
+				<button class="btn btn-outline-secondary" @onclick="RefreshExportJobAsync" disabled="@(IsBusy || CurrentExportJobId is null)">Refresh job status</button>
+				<button class="btn btn-outline-success" @onclick="DownloadExportAsync" disabled="@(IsBusy || CurrentExportJob is null || !CurrentExportJob.Status.Equals("completed", StringComparison.OrdinalIgnoreCase))">Download preview</button>
+			</div>
+		</div>
+
+		@if (CurrentExportJob is not null)
+		{
+			<div class="alert alert-info" role="alert">
+				Job: @CurrentExportJob.JobId | Status: @CurrentExportJob.Status | Updated: @CurrentExportJob.UpdatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+				@if (!string.IsNullOrWhiteSpace(CurrentExportJob.Error))
+				{
+					<span> | Error: @CurrentExportJob.Error</span>
+				}
+			</div>
+		}
+
+		@if (!string.IsNullOrWhiteSpace(LastExportPreview))
+		{
+			<label class="form-label">Downloaded CSV preview</label>
+			<pre class="preview-box">@LastExportPreview</pre>
+		}
+	</div>
+</div>
+
+@code {
+	private readonly List<string> Environments = ["demo", "qa", "prod"];
+	private readonly List<string> ExportStatuses = ["", "active", "inactive", "maintenance"];
+	private DeviceDashboardDto? Dashboard { get; set; }
+	private DeviceExportJobDto? CurrentExportJob { get; set; }
+	private Guid? CurrentExportJobId { get; set; }
+	private string SelectedEnvironment { get; set; } = "demo";
+	private string ExportEnvironment { get; set; } = "demo";
+	private string ExportStatus { get; set; } = string.Empty;
+	private string? LastExportPreview { get; set; }
+	private bool IsBusy { get; set; }
+	private string? ErrorMessage { get; set; }
+	private string? SuccessMessage { get; set; }
+
+	protected override async Task OnInitializedAsync()
+	{
+		await LoadDashboardAsync();
+	}
+
+	private async Task LoadDashboardAsync()
+	{
+		await ExecuteAsync(async cancellationToken =>
+		{
+			Dashboard = await DeviceApiClient.GetDashboardAsync(SelectedEnvironment, cancellationToken);
+		}, "Dashboard refreshed.");
+	}
+
+	private async Task StartExportAsync()
+	{
+		await ExecuteAsync(async cancellationToken =>
+		{
+			var command = new StartDeviceExportCommand(
+				ExportEnvironment,
+				string.IsNullOrWhiteSpace(ExportStatus) ? null : ExportStatus);
+
+			CurrentExportJob = await DeviceApiClient.StartDeviceExportAsync(command, cancellationToken);
+			CurrentExportJobId = CurrentExportJob.JobId;
+			LastExportPreview = null;
+		}, "Export job started.");
+	}
+
+	private async Task RefreshExportJobAsync()
+	{
+		await ExecuteAsync(async cancellationToken =>
+		{
+			if (CurrentExportJobId is null)
+			{
+				throw new InvalidOperationException("No export job selected.");
+			}
+
+			CurrentExportJob = await DeviceApiClient.GetDeviceExportStatusAsync(CurrentExportJobId.Value, cancellationToken)
+				?? throw new InvalidOperationException("Export job was not found.");
+		}, "Export status refreshed.");
+	}
+
+	private async Task DownloadExportAsync()
+	{
+		await ExecuteAsync(async cancellationToken =>
+		{
+			if (CurrentExportJobId is null)
+			{
+				throw new InvalidOperationException("No export job selected.");
+			}
+
+			var content = await DeviceApiClient.DownloadDeviceExportAsync(CurrentExportJobId.Value, cancellationToken);
+			if (content is null)
+			{
+				throw new InvalidOperationException("The export file is not available yet.");
+			}
+
+			var csvText = Encoding.UTF8.GetString(content);
+			LastExportPreview = string.Join('\n', csvText.Split('\n').Take(20));
+		}, "Export file downloaded (preview)." );
+	}
+
+	private static string FormatUtc(DateTimeOffset? value)
+	{
+		return value.HasValue
+			? value.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+			: "n/a";
+	}
+
+	private async Task ExecuteAsync(Func<CancellationToken, Task> action, string successMessage)
+	{
+		if (IsBusy)
+		{
+			return;
+		}
+
+		IsBusy = true;
+		ErrorMessage = null;
+
+		try
+		{
+			await action(CancellationToken.None);
+			SuccessMessage = successMessage;
+		}
+		catch (Exception ex)
+		{
+			SuccessMessage = null;
+			ErrorMessage = ex.Message;
+		}
+		finally
+		{
+			IsBusy = false;
+		}
+	}
+}

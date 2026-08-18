@@ -1,0 +1,419 @@
+@page "/config-templates"
+@using System.ComponentModel.DataAnnotations
+@using C2C.DevicePlatform.Web.Api
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@attribute [Authorize(Policy = "PlatformViewer")]
+@inject DeviceAdminApiClient DeviceApiClient
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Config Templates</PageTitle>
+
+<h1>Environment Config Templates</h1>
+<p class="text-secondary">Manage versioned environment templates and rollback to a previous version.</p>
+
+@if (!string.IsNullOrWhiteSpace(ErrorMessage))
+{
+    <div class="alert alert-danger" role="alert">@ErrorMessage</div>
+}
+
+@if (!string.IsNullOrWhiteSpace(SuccessMessage))
+{
+    <div class="alert alert-success" role="alert">@SuccessMessage</div>
+}
+
+<div class="mb-3 d-flex gap-2 align-items-center">
+    <InputSelect class="form-select form-select-sm env-select" @bind-Value="SelectedEnvironment">
+        @foreach (var environment in Environments)
+        {
+            <option value="@environment">@environment</option>
+        }
+    </InputSelect>
+    <InputText class="form-control form-control-sm" @bind-Value="SelectedConfigKey" placeholder="Config key" />
+    <button class="btn btn-outline-secondary btn-sm" @onclick="LoadVersionsAsync" disabled="@IsBusy">Load versions</button>
+</div>
+
+<AuthorizeView Policy="PlatformOperator">
+    <Authorized Context="authContext">
+        <div class="row g-3 mb-4">
+            <div class="col-12 col-lg-7">
+                <div class="card shadow-sm">
+                    <div class="card-header">Create new version</div>
+                    <div class="card-body">
+                        <EditForm Model="UpsertForm" OnValidSubmit="CreateVersionAsync">
+                            <DataAnnotationsValidator />
+                            <div class="mb-3">
+                                <label class="form-label" for="upsert-environment">Environment</label>
+                                <InputSelect id="upsert-environment" class="form-select" @bind-Value="UpsertForm.Environment">
+                                    @foreach (var environment in Environments)
+                                    {
+                                        <option value="@environment">@environment</option>
+                                    }
+                                </InputSelect>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="upsert-config-key">ConfigKey</label>
+                                <InputText id="upsert-config-key" class="form-control" @bind-Value="UpsertForm.ConfigKey" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="upsert-config-json">ConfigValueJson</label>
+                                <InputTextArea id="upsert-config-json" class="form-control json-area" @bind-Value="UpsertForm.ConfigValueJson" />
+                            </div>
+                            <ValidationSummary />
+                            <button class="btn btn-primary" type="submit" disabled="@IsBusy">Create version</button>
+                        </EditForm>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12 col-lg-5">
+                <div class="card shadow-sm">
+                    <div class="card-header">Rollback</div>
+                    <div class="card-body">
+                        <EditForm Model="RollbackForm" OnValidSubmit="RollbackAsync">
+                            <DataAnnotationsValidator />
+                            <div class="mb-3">
+                                <label class="form-label" for="rollback-environment">Environment</label>
+                                <InputSelect id="rollback-environment" class="form-select" @bind-Value="RollbackForm.Environment">
+                                    @foreach (var environment in Environments)
+                                    {
+                                        <option value="@environment">@environment</option>
+                                    }
+                                </InputSelect>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="rollback-config-key">ConfigKey</label>
+                                <InputText id="rollback-config-key" class="form-control" @bind-Value="RollbackForm.ConfigKey" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="rollback-version">Source version</label>
+                                <InputNumber id="rollback-version" class="form-control" @bind-Value="RollbackForm.SourceVersion" />
+                            </div>
+                            <ValidationSummary />
+                            <button class="btn btn-warning" type="submit" disabled="@IsBusy">Rollback</button>
+                        </EditForm>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12">
+                <div class="card shadow-sm">
+                    <div class="card-header">Device override and effective config</div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <div class="col-12 col-lg-7">
+                                <EditForm Model="OverrideForm" OnValidSubmit="CreateOverrideAsync">
+                                    <DataAnnotationsValidator />
+                                    <div class="mb-3">
+                                        <label class="form-label" for="override-device-id">DeviceId</label>
+                                        <InputText id="override-device-id" class="form-control" @bind-Value="OverrideForm.DeviceId" />
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label" for="override-config-key">ConfigKey</label>
+                                        <InputText id="override-config-key" class="form-control" @bind-Value="OverrideForm.ConfigKey" />
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label" for="override-config-json">ConfigValueJson</label>
+                                        <InputTextArea id="override-config-json" class="form-control json-area" @bind-Value="OverrideForm.ConfigValueJson" />
+                                    </div>
+                                    <ValidationSummary />
+                                    <button class="btn btn-primary" type="submit" disabled="@IsBusy">Create override</button>
+                                    <button class="btn btn-outline-secondary ms-2" type="button" @onclick="LoadEffectiveConfigAsync" disabled="@IsBusy">Resolve effective</button>
+                                </EditForm>
+                            </div>
+
+                            <div class="col-12 col-lg-5">
+                                <h6>Latest effective config</h6>
+                                @if (EffectiveConfig is null)
+                                {
+                                    <p class="text-secondary">No effective config loaded.</p>
+                                }
+                                else
+                                {
+                                    <div class="alert alert-info" role="alert">
+                                        Template v@EffectiveConfig.TemplateVersion | Override v@(EffectiveConfig.OverrideVersion?.ToString() ?? "-") | HasOverride: @EffectiveConfig.HasOverride
+                                    </div>
+                                    <pre class="json-preview">@EffectiveConfig.EffectiveValueJson</pre>
+                                }
+
+                                <h6 class="mt-3">Override versions</h6>
+                                @if (OverrideVersions.Count == 0)
+                                {
+                                    <p class="text-secondary">No overrides found for this device/config key.</p>
+                                }
+                                else
+                                {
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-striped align-middle">
+                                            <thead>
+                                                <tr>
+                                                    <th>Version</th>
+                                                    <th>Updated</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                @foreach (var item in OverrideVersions)
+                                                {
+                                                    <tr>
+                                                        <td>@item.Version</td>
+                                                        <td>@item.UpdatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                                                    </tr>
+                                                }
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </Authorized>
+    <NotAuthorized>
+        <div class="alert alert-warning" role="alert">
+            You are in read-only mode. Operator role is required to publish or rollback template versions.
+        </div>
+    </NotAuthorized>
+</AuthorizeView>
+
+<div class="card shadow-sm">
+    <div class="card-header">Template versions</div>
+    <div class="card-body">
+        @if (IsBusy)
+        {
+            <p class="mb-0">Loading versions...</p>
+        }
+        else if (Versions.Count == 0)
+        {
+            <p class="mb-0">No versions found for selected environment and key.</p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-sm table-striped align-middle">
+                    <thead>
+                        <tr>
+                            <th>Version</th>
+                            <th>Updated</th>
+                            <th>Config JSON</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var item in Versions)
+                        {
+                            <tr>
+                                <td>@item.Version</td>
+                                <td>@item.UpdatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                                <td><pre class="json-preview">@item.ConfigValueJson</pre></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private readonly List<string> Environments = ["demo", "qa", "prod"];
+    private readonly List<EnvironmentConfigRecordDto> Versions = [];
+
+    private bool IsBusy { get; set; }
+    private bool CanManage { get; set; }
+    private string? ErrorMessage { get; set; }
+    private string? SuccessMessage { get; set; }
+    private string SelectedEnvironment { get; set; } = "demo";
+    private string SelectedConfigKey { get; set; } = "";
+    private EffectiveDeviceConfigDto? EffectiveConfig { get; set; }
+    private readonly List<DeviceConfigOverrideDto> OverrideVersions = [];
+
+    private UpsertEnvironmentConfigFormModel UpsertForm { get; set; } = new();
+    private RollbackEnvironmentConfigFormModel RollbackForm { get; set; } = new();
+    private UpsertDeviceOverrideFormModel OverrideForm { get; set; } = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        CanManage = user.IsInRole("PlatformAdmin") || user.IsInRole("OpsAdmin");
+
+        UpsertForm.Environment = SelectedEnvironment;
+        RollbackForm.Environment = SelectedEnvironment;
+    }
+
+    private async Task LoadVersionsAsync()
+    {
+        await ExecuteAsync(async cancellationToken =>
+        {
+            if (string.IsNullOrWhiteSpace(SelectedConfigKey))
+            {
+                throw new InvalidOperationException("Config key is required to load versions.");
+            }
+
+            Versions.Clear();
+            var result = await DeviceApiClient.GetEnvironmentConfigVersionsAsync(
+                SelectedEnvironment.Trim().ToLowerInvariant(),
+                SelectedConfigKey.Trim(),
+                cancellationToken);
+
+            Versions.AddRange(result.OrderByDescending(item => item.Version));
+        }, "Template versions loaded.");
+    }
+
+    private async Task CreateVersionAsync()
+    {
+        await ExecuteAsync(async cancellationToken =>
+        {
+            var command = new UpsertEnvironmentConfigCommand(
+                UpsertForm.Environment.Trim().ToLowerInvariant(),
+                UpsertForm.ConfigKey.Trim(),
+                UpsertForm.ConfigValueJson.Trim());
+
+            await DeviceApiClient.CreateEnvironmentConfigVersionAsync(command, cancellationToken);
+            SelectedEnvironment = command.Environment;
+            SelectedConfigKey = command.ConfigKey;
+            await LoadWithoutMessageAsync(cancellationToken);
+        }, "Template version created.");
+    }
+
+    private async Task RollbackAsync()
+    {
+        await ExecuteAsync(async cancellationToken =>
+        {
+            var environment = RollbackForm.Environment.Trim().ToLowerInvariant();
+            var configKey = RollbackForm.ConfigKey.Trim();
+
+            var result = await DeviceApiClient.RollbackEnvironmentConfigAsync(
+                environment,
+                configKey,
+                RollbackForm.SourceVersion,
+                cancellationToken);
+
+            if (result is null)
+            {
+                throw new InvalidOperationException("Source version was not found.");
+            }
+
+            SelectedEnvironment = environment;
+            SelectedConfigKey = configKey;
+            await LoadWithoutMessageAsync(cancellationToken);
+        }, "Rollback created as new version.");
+    }
+
+    private async Task CreateOverrideAsync()
+    {
+        await ExecuteAsync(async cancellationToken =>
+        {
+            var command = new UpsertDeviceOverrideCommand(
+                OverrideForm.DeviceId.Trim(),
+                OverrideForm.ConfigKey.Trim(),
+                OverrideForm.ConfigValueJson.Trim());
+
+            await DeviceApiClient.CreateDeviceOverrideAsync(command, cancellationToken);
+            await LoadOverrideAndEffectiveWithoutMessageAsync(cancellationToken);
+        }, "Device override created.");
+    }
+
+    private async Task LoadEffectiveConfigAsync()
+    {
+        await ExecuteAsync(async cancellationToken =>
+        {
+            await LoadOverrideAndEffectiveWithoutMessageAsync(cancellationToken);
+        }, "Effective config resolved.");
+    }
+
+    private async Task LoadWithoutMessageAsync(CancellationToken cancellationToken)
+    {
+        Versions.Clear();
+        var result = await DeviceApiClient.GetEnvironmentConfigVersionsAsync(
+            SelectedEnvironment.Trim().ToLowerInvariant(),
+            SelectedConfigKey.Trim(),
+            cancellationToken);
+
+        Versions.AddRange(result.OrderByDescending(item => item.Version));
+    }
+
+    private async Task LoadOverrideAndEffectiveWithoutMessageAsync(CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(OverrideForm.DeviceId) || string.IsNullOrWhiteSpace(OverrideForm.ConfigKey))
+        {
+            throw new InvalidOperationException("DeviceId and ConfigKey are required.");
+        }
+
+        OverrideVersions.Clear();
+        var overrides = await DeviceApiClient.GetDeviceOverridesAsync(
+            OverrideForm.DeviceId.Trim(),
+            OverrideForm.ConfigKey.Trim(),
+            cancellationToken);
+
+        OverrideVersions.AddRange(overrides.OrderByDescending(item => item.Version));
+
+        EffectiveConfig = await DeviceApiClient.GetEffectiveConfigAsync(
+            OverrideForm.DeviceId.Trim(),
+            OverrideForm.ConfigKey.Trim(),
+            cancellationToken);
+    }
+
+    private async Task ExecuteAsync(Func<CancellationToken, Task> action, string successMessage)
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        ErrorMessage = null;
+
+        try
+        {
+            await action(CancellationToken.None);
+            SuccessMessage = successMessage;
+        }
+        catch (Exception ex)
+        {
+            SuccessMessage = null;
+            ErrorMessage = ex.Message;
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private sealed class UpsertEnvironmentConfigFormModel
+    {
+        [Required]
+        public string Environment { get; set; } = "demo";
+
+        [Required]
+        public string ConfigKey { get; set; } = string.Empty;
+
+        [Required]
+        public string ConfigValueJson { get; set; } = "{\n  \"timeoutSeconds\": 30\n}";
+    }
+
+    private sealed class RollbackEnvironmentConfigFormModel
+    {
+        [Required]
+        public string Environment { get; set; } = "demo";
+
+        [Required]
+        public string ConfigKey { get; set; } = string.Empty;
+
+        [Range(1, int.MaxValue)]
+        public int SourceVersion { get; set; } = 1;
+    }
+
+    private sealed class UpsertDeviceOverrideFormModel
+    {
+        [Required]
+        public string DeviceId { get; set; } = string.Empty;
+
+        [Required]
+        public string ConfigKey { get; set; } = string.Empty;
+
+        [Required]
+        public string ConfigValueJson { get; set; } = "{\n  \"timeoutSeconds\": 40\n}";
+    }
+}

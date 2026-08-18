@@ -1,0 +1,648 @@
+@page "/devices"
+@using System.ComponentModel.DataAnnotations
+@using C2C.DevicePlatform.Web.Api
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@attribute [Authorize(Policy = "PlatformViewer")]
+@inject DeviceAdminApiClient DeviceApiClient
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Device Management</PageTitle>
+
+<h1>Device Management</h1>
+<p class="text-secondary">Register, update assignments, and deactivate POS devices per environment.</p>
+
+@if (!string.IsNullOrWhiteSpace(ErrorMessage))
+{
+    <div class="alert alert-danger" role="alert">@ErrorMessage</div>
+}
+
+@if (!string.IsNullOrWhiteSpace(SuccessMessage))
+{
+    <div class="alert alert-success" role="alert">@SuccessMessage</div>
+}
+
+<div class="mb-3 d-flex gap-2">
+    <button class="btn btn-outline-secondary" @onclick="LoadAsync" disabled="@IsBusy">Refresh list</button>
+</div>
+
+<AuthorizeView Policy="PlatformOperator">
+    <Authorized Context="authContext">
+        <div class="row g-3 mb-4">
+            <div class="col-12 col-lg-7">
+                <div class="card shadow-sm">
+                    <div class="card-header">Register or update device</div>
+                    <div class="card-body">
+                        <EditForm Model="RegisterForm" OnValidSubmit="RegisterAsync">
+                            <DataAnnotationsValidator />
+
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label" for="device-id">DeviceId</label>
+                                    <InputText id="device-id" class="form-control" @bind-Value="RegisterForm.DeviceId" />
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label" for="merchant-id">MerchantId</label>
+                                    <InputText id="merchant-id" class="form-control" @bind-Value="RegisterForm.MerchantId" />
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label" for="branch-id">BranchId</label>
+                                    <InputText id="branch-id" class="form-control" @bind-Value="RegisterForm.BranchId" />
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label" for="register-id">RegisterId</label>
+                                    <InputText id="register-id" class="form-control" @bind-Value="RegisterForm.RegisterId" />
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label" for="environment">Environment</label>
+                                    <InputSelect id="environment" class="form-select" @bind-Value="RegisterForm.Environment">
+                                        @foreach (var environment in Environments)
+                                        {
+                                            <option value="@environment">@environment</option>
+                                        }
+                                    </InputSelect>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label" for="status">Status</label>
+                                    <InputSelect id="status" class="form-select" @bind-Value="RegisterForm.Status">
+                                        @foreach (var status in Statuses)
+                                        {
+                                            <option value="@status">@status</option>
+                                        }
+                                    </InputSelect>
+                                </div>
+                            </div>
+
+                            <ValidationSummary class="mt-3" />
+
+                            <button class="btn btn-primary mt-3" type="submit" disabled="@IsBusy">Save device</button>
+                        </EditForm>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12 col-lg-5">
+                <div class="card shadow-sm">
+                    <div class="card-header">Assign device</div>
+                    <div class="card-body">
+                        <EditForm Model="AssignForm" OnValidSubmit="AssignAsync">
+                            <DataAnnotationsValidator />
+
+                            <div class="mb-3">
+                                <label class="form-label" for="assign-device-id">DeviceId</label>
+                                <InputText id="assign-device-id" class="form-control" @bind-Value="AssignForm.DeviceId" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="assign-merchant-id">MerchantId</label>
+                                <InputText id="assign-merchant-id" class="form-control" @bind-Value="AssignForm.MerchantId" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="assign-branch-id">BranchId</label>
+                                <InputText id="assign-branch-id" class="form-control" @bind-Value="AssignForm.BranchId" />
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="assign-register-id">RegisterId</label>
+                                <InputText id="assign-register-id" class="form-control" @bind-Value="AssignForm.RegisterId" />
+                            </div>
+
+                            <ValidationSummary class="mt-3" />
+
+                            <button class="btn btn-primary" type="submit" disabled="@IsBusy">Assign device</button>
+                        </EditForm>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12">
+                <div class="card shadow-sm">
+                    <div class="card-header">Bulk import devices (CSV)</div>
+                    <div class="card-body">
+                        <p class="text-secondary mb-2">Expected columns: DeviceId, MerchantId, BranchId, RegisterId, Environment, Status</p>
+                        <div class="d-flex flex-column flex-md-row gap-2 align-items-md-center">
+                            <InputFile OnChange="OnImportFileChanged" accept=".csv,text/csv" />
+                            <button class="btn btn-primary" @onclick="ImportCsvAsync" disabled="@(!CanImport || IsBusy)">Import CSV</button>
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(SelectedImportFileName))
+                        {
+                            <p class="mt-2 mb-0">Selected file: @SelectedImportFileName</p>
+                        }
+
+                        @if (LastImportResult is not null)
+                        {
+                            <div class="alert alert-info mt-3 mb-0" role="alert">
+                                Total rows: @LastImportResult.TotalRows | Processed: @LastImportResult.ProcessedRows | Imported: @LastImportResult.ImportedRows | Failed: @LastImportResult.FailedRows
+                            </div>
+
+                            @if (LastImportResult.Errors.Count > 0)
+                            {
+                                <div class="table-responsive mt-3">
+                                    <table class="table table-sm table-striped align-middle">
+                                        <thead>
+                                            <tr>
+                                                <th>Row</th>
+                                                <th>DeviceId</th>
+                                                <th>Error</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var rowError in LastImportResult.Errors)
+                                            {
+                                                <tr>
+                                                    <td>@rowError.RowNumber</td>
+                                                    <td>@rowError.DeviceId</td>
+                                                    <td>@rowError.Error</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    </Authorized>
+    <NotAuthorized>
+        <div class="alert alert-warning" role="alert">
+            You are in read-only mode. Operator role is required to create, assign, or deactivate devices.
+        </div>
+    </NotAuthorized>
+</AuthorizeView>
+
+<div class="card shadow-sm mb-4">
+    <div class="card-header">Advanced device detail</div>
+    <div class="card-body">
+        <div class="row g-2 align-items-end mb-3">
+            <div class="col-md-3">
+                <label class="form-label">DeviceId</label>
+                <InputText class="form-control" @bind-Value="DetailDeviceId" />
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Page</label>
+                <InputNumber class="form-control" @bind-Value="DetailPage" />
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Page size</label>
+                <InputNumber class="form-control" @bind-Value="DetailPageSize" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Event filter</label>
+                <InputText class="form-control" @bind-Value="DetailEventFilter" placeholder="session | transaction | payment" />
+            </div>
+            <div class="col-md-2 d-flex gap-2">
+                <button class="btn btn-outline-primary" @onclick="LoadDetailAsync" disabled="@IsBusy">Load detail</button>
+            </div>
+        </div>
+
+        @if (SelectedDetail is null)
+        {
+            <p class="mb-0">Select a device from the list or type a DeviceId to inspect assignments, effective config and recent events.</p>
+        }
+        else
+        {
+            <div class="alert alert-secondary" role="alert">
+                Device: @SelectedDetail.Device.DeviceId | Environment: @SelectedDetail.Device.Environment | Status: @SelectedDetail.Device.Status
+            </div>
+
+            <div class="row g-3">
+                <div class="col-12 col-lg-6">
+                    <h6>Assignment history</h6>
+                    @if (SelectedDetail.Assignments.Count == 0)
+                    {
+                        <p class="text-secondary">No assignments available.</p>
+                    }
+                    else
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-sm table-striped align-middle">
+                                <thead>
+                                    <tr>
+                                        <th>Assigned</th>
+                                        <th>Merchant</th>
+                                        <th>Branch</th>
+                                        <th>Register</th>
+                                        <th>Active</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var assignment in SelectedDetail.Assignments)
+                                    {
+                                        <tr>
+                                            <td>@assignment.AssignedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                                            <td>@assignment.MerchantId</td>
+                                            <td>@assignment.BranchId</td>
+                                            <td>@assignment.RegisterId</td>
+                                            <td>@assignment.Active</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
+
+                <div class="col-12 col-lg-6">
+                    <h6>Effective config</h6>
+                    @if (SelectedDetail.EffectiveConfigs.Count == 0)
+                    {
+                        <p class="text-secondary">No effective config rows were found.</p>
+                    }
+                    else
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-sm table-striped align-middle">
+                                <thead>
+                                    <tr>
+                                        <th>Key</th>
+                                        <th>Template</th>
+                                        <th>Override</th>
+                                        <th>Value</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var config in SelectedDetail.EffectiveConfigs)
+                                    {
+                                        <tr>
+                                            <td>@config.ConfigKey</td>
+                                            <td>@config.TemplateVersion</td>
+                                            <td>@(config.OverrideVersion?.ToString() ?? "-")</td>
+                                            <td><pre class="json-preview">@config.EffectiveValueJson</pre></td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
+
+                <div class="col-12 col-lg-6">
+                    <h6>Recent sessions</h6>
+                    @if (SelectedDetail.RecentSessions.Count == 0)
+                    {
+                        <p class="text-secondary">No recent session events.</p>
+                    }
+                    else
+                    {
+                        <ul class="list-group list-group-flush">
+                            @foreach (var entry in SelectedDetail.RecentSessions)
+                            {
+                                <li class="list-group-item px-0">
+                                    <strong>@entry.Action</strong> by @entry.Actor at @entry.Utc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
+
+                <div class="col-12 col-lg-6">
+                    <h6>Recent transactions</h6>
+                    @if (SelectedDetail.RecentTransactions.Count == 0)
+                    {
+                        <p class="text-secondary">No recent transaction events.</p>
+                    }
+                    else
+                    {
+                        <ul class="list-group list-group-flush">
+                            @foreach (var entry in SelectedDetail.RecentTransactions)
+                            {
+                                <li class="list-group-item px-0">
+                                    <strong>@entry.Action</strong> by @entry.Actor at @entry.Utc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
+            </div>
+
+            <div class="mt-3 d-flex gap-2">
+                <button class="btn btn-sm btn-outline-secondary" @onclick="PreviousDetailPageAsync" disabled="@(IsBusy || DetailPage <= 1)">Previous page</button>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="NextDetailPageAsync" disabled="@IsBusy">Next page</button>
+            </div>
+        }
+    </div>
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-header">Device catalog</div>
+    <div class="card-body">
+        @if (IsBusy)
+        {
+            <p class="mb-0">Loading devices...</p>
+        }
+        else if (DeviceRows.Count == 0)
+        {
+            <p class="mb-0">No devices found.</p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-striped table-sm align-middle">
+                    <thead>
+                        <tr>
+                            <th>DeviceId</th>
+                            <th>MerchantId</th>
+                            <th>BranchId</th>
+                            <th>RegisterId</th>
+                            <th>Environment</th>
+                            <th>Status</th>
+                            <th>Updated</th>
+                            @if (CanManage)
+                            {
+                                <th>Actions</th>
+                            }
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var device in DeviceRows)
+                        {
+                            <tr>
+                                <td>@device.DeviceId</td>
+                                <td>@device.MerchantId</td>
+                                <td>@device.BranchId</td>
+                                <td>@device.RegisterId</td>
+                                <td>@device.Environment</td>
+                                <td>@device.Status</td>
+                                <td>@device.UpdatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                                @if (CanManage)
+                                {
+                                    <td>
+                                        <div class="d-flex gap-2">
+                                            <button class="btn btn-sm btn-outline-primary" @onclick="() => UseAsRegisterTemplate(device)">Edit</button>
+                                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => UseAsAssignTemplate(device)">Assign</button>
+                                            <button class="btn btn-sm btn-outline-dark" @onclick="() => UseAsDetailTemplate(device)">Detail</button>
+                                            <button class="btn btn-sm btn-outline-danger" @onclick="() => DeactivateAsync(device.DeviceId)" disabled="@IsBusy">Deactivate</button>
+                                        </div>
+                                    </td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private readonly List<string> Environments = ["demo", "qa", "prod"];
+    private readonly List<string> Statuses = ["active", "inactive", "maintenance"];
+    private readonly List<DeviceRecordDto> DeviceRows = [];
+    private RegisterDeviceFormModel RegisterForm { get; set; } = new();
+    private AssignDeviceFormModel AssignForm { get; set; } = new();
+    private IBrowserFile? SelectedImportFile { get; set; }
+    private string? SelectedImportFileName { get; set; }
+    private DeviceImportResultDto? LastImportResult { get; set; }
+    private DeviceDetailDto? SelectedDetail { get; set; }
+    private string DetailDeviceId { get; set; } = string.Empty;
+    private int DetailPage { get; set; } = 1;
+    private int DetailPageSize { get; set; } = 20;
+    private string? DetailEventFilter { get; set; }
+    private bool IsBusy { get; set; }
+    private bool CanManage { get; set; }
+    private string? ErrorMessage { get; set; }
+    private string? SuccessMessage { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        CanManage = user.IsInRole("PlatformAdmin") || user.IsInRole("OpsAdmin");
+
+        await LoadAsync();
+    }
+
+    private bool CanImport => CanManage && SelectedImportFile is not null;
+
+    private async Task LoadAsync()
+    {
+        await ExecuteAsync(async cancellationToken =>
+        {
+            DeviceRows.Clear();
+            var devices = await DeviceApiClient.GetAllAsync(cancellationToken);
+            DeviceRows.AddRange(devices.OrderBy(device => device.DeviceId, StringComparer.OrdinalIgnoreCase));
+        }, "Device list refreshed.");
+    }
+
+    private async Task RegisterAsync()
+    {
+        await ExecuteAsync(async cancellationToken =>
+        {
+            var command = new RegisterDeviceCommand(
+                RegisterForm.DeviceId.Trim(),
+                RegisterForm.MerchantId.Trim(),
+                RegisterForm.BranchId.Trim(),
+                RegisterForm.RegisterId.Trim(),
+                RegisterForm.Environment.Trim().ToLowerInvariant(),
+                RegisterForm.Status.Trim().ToLowerInvariant());
+
+            await DeviceApiClient.RegisterAsync(command, cancellationToken);
+            await LoadWithoutMessageAsync(cancellationToken);
+        }, $"Device {RegisterForm.DeviceId} saved.");
+    }
+
+    private async Task AssignAsync()
+    {
+        await ExecuteAsync(async cancellationToken =>
+        {
+            var command = new AssignDeviceCommand(
+                AssignForm.MerchantId.Trim(),
+                AssignForm.BranchId.Trim(),
+                AssignForm.RegisterId.Trim());
+
+            var assigned = await DeviceApiClient.AssignAsync(AssignForm.DeviceId.Trim(), command, cancellationToken);
+            if (assigned is null)
+            {
+                throw new InvalidOperationException($"Device {AssignForm.DeviceId} was not found.");
+            }
+
+            await LoadWithoutMessageAsync(cancellationToken);
+        }, $"Device {AssignForm.DeviceId} assigned.");
+    }
+
+    private async Task DeactivateAsync(string deviceId)
+    {
+        await ExecuteAsync(async cancellationToken =>
+        {
+            var updated = await DeviceApiClient.DeactivateAsync(deviceId, cancellationToken);
+            if (updated is null)
+            {
+                throw new InvalidOperationException($"Device {deviceId} was not found.");
+            }
+
+            await LoadWithoutMessageAsync(cancellationToken);
+        }, $"Device {deviceId} deactivated.");
+    }
+
+    private void OnImportFileChanged(InputFileChangeEventArgs eventArgs)
+    {
+        SelectedImportFile = eventArgs.File;
+        SelectedImportFileName = SelectedImportFile?.Name;
+        LastImportResult = null;
+    }
+
+    private async Task ImportCsvAsync()
+    {
+        await ExecuteAsync(async cancellationToken =>
+        {
+            if (SelectedImportFile is null)
+            {
+                throw new InvalidOperationException("Please select a CSV file before importing.");
+            }
+
+            await using var csvStream = SelectedImportFile.OpenReadStream(10 * 1024 * 1024, cancellationToken);
+            LastImportResult = await DeviceApiClient.ImportCsvAsync(csvStream, SelectedImportFile.Name, cancellationToken);
+            await LoadWithoutMessageAsync(cancellationToken);
+        }, "CSV import completed.");
+    }
+
+    private void UseAsRegisterTemplate(DeviceRecordDto device)
+    {
+        RegisterForm = new RegisterDeviceFormModel
+        {
+            DeviceId = device.DeviceId,
+            MerchantId = device.MerchantId,
+            BranchId = device.BranchId,
+            RegisterId = device.RegisterId,
+            Environment = device.Environment,
+            Status = device.Status
+        };
+    }
+
+    private void UseAsAssignTemplate(DeviceRecordDto device)
+    {
+        AssignForm = new AssignDeviceFormModel
+        {
+            DeviceId = device.DeviceId,
+            MerchantId = device.MerchantId,
+            BranchId = device.BranchId,
+            RegisterId = device.RegisterId
+        };
+    }
+
+    private void UseAsDetailTemplate(DeviceRecordDto device)
+    {
+        DetailDeviceId = device.DeviceId;
+        DetailPage = 1;
+        _ = LoadDetailAsync();
+    }
+
+    private async Task LoadDetailAsync()
+    {
+        await ExecuteAsync(async cancellationToken =>
+        {
+            if (string.IsNullOrWhiteSpace(DetailDeviceId))
+            {
+                throw new InvalidOperationException("DeviceId is required to load detail.");
+            }
+
+            if (DetailPage <= 0)
+            {
+                DetailPage = 1;
+            }
+
+            if (DetailPageSize <= 0)
+            {
+                DetailPageSize = 20;
+            }
+
+            SelectedDetail = await DeviceApiClient.GetDeviceDetailAsync(
+                DetailDeviceId.Trim(),
+                DetailPage,
+                DetailPageSize,
+                string.IsNullOrWhiteSpace(DetailEventFilter) ? null : DetailEventFilter.Trim(),
+                cancellationToken);
+
+            if (SelectedDetail is null)
+            {
+                throw new InvalidOperationException($"Device {DetailDeviceId} was not found.");
+            }
+        }, "Device detail loaded.");
+    }
+
+    private async Task PreviousDetailPageAsync()
+    {
+        if (DetailPage <= 1)
+        {
+            return;
+        }
+
+        DetailPage--;
+        await LoadDetailAsync();
+    }
+
+    private async Task NextDetailPageAsync()
+    {
+        DetailPage++;
+        await LoadDetailAsync();
+    }
+
+    private async Task ExecuteAsync(Func<CancellationToken, Task> action, string successMessage)
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        ErrorMessage = null;
+
+        try
+        {
+            await action(CancellationToken.None);
+            SuccessMessage = successMessage;
+        }
+        catch (Exception ex)
+        {
+            SuccessMessage = null;
+            ErrorMessage = ex.Message;
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private async Task LoadWithoutMessageAsync(CancellationToken cancellationToken)
+    {
+        DeviceRows.Clear();
+        var devices = await DeviceApiClient.GetAllAsync(cancellationToken);
+        DeviceRows.AddRange(devices.OrderBy(device => device.DeviceId, StringComparer.OrdinalIgnoreCase));
+    }
+
+    private sealed class RegisterDeviceFormModel
+    {
+        [Required]
+        public string DeviceId { get; set; } = string.Empty;
+
+        [Required]
+        public string MerchantId { get; set; } = string.Empty;
+
+        [Required]
+        public string BranchId { get; set; } = string.Empty;
+
+        [Required]
+        public string RegisterId { get; set; } = string.Empty;
+
+        [Required]
+        public string Environment { get; set; } = "demo";
+
+        [Required]
+        public string Status { get; set; } = "active";
+    }
+
+    private sealed class AssignDeviceFormModel
+    {
+        [Required]
+        public string DeviceId { get; set; } = string.Empty;
+
+        [Required]
+        public string MerchantId { get; set; } = string.Empty;
+
+        [Required]
+        public string BranchId { get; set; } = string.Empty;
+
+        [Required]
+        public string RegisterId { get; set; } = string.Empty;
+    }
+}

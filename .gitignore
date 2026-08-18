@@ -1,0 +1,27 @@
+# Build outputs
+bin/
+obj/
+artifacts/
+TestResults/
+coverage/
+*.coverage
+*.trx
+
+# IDE and tooling
+.vs/
+.idea/
+*.user
+*.suo
+
+# Packages and logs
+*.nupkg
+*.snupkg
+*.log
+
+# Local environment
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db

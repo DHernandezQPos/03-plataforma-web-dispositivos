@@ -1,0 +1,22 @@
+h1 {
+    margin-bottom: 0.25rem;
+}
+
+.card-header {
+    font-weight: 600;
+}
+
+.env-select {
+    max-width: 140px;
+}
+
+.json-area {
+    min-height: 180px;
+    font-family: Consolas, "Courier New", monospace;
+}
+
+.json-preview {
+    white-space: pre-wrap;
+    margin-bottom: 0;
+    max-width: 520px;
+}

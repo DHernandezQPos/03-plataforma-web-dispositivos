@@ -38,21 +38,32 @@ var apiScope = builder.Configuration.GetValue<string>("Authentication:Oidc:ApiSc
 
 bool HasAllowedEnvironment(System.Security.Claims.ClaimsPrincipal user)
 {
+    var validEnvironments = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "demo",
+        "qa",
+        "prod"
+    };
+
     var allowedEnvironments = user.FindAll("env").Select(claim => claim.Value)
         .Concat(user.FindAll("environment").Select(claim => claim.Value))
-        .SelectMany(value => value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        .SelectMany(value => value.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         .Where(value => !string.IsNullOrWhiteSpace(value))
         .Select(value => value.Trim().ToLowerInvariant())
         .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-    if (allowedEnvironments.Count == 0 && allowMissingEnvironmentClaim)
+    if (!allowMissingEnvironmentClaim)
     {
-        allowedEnvironments.Add(defaultEnvironment.Trim().ToLowerInvariant());
+        return allowedEnvironments.Overlaps(validEnvironments);
     }
 
-    return allowedEnvironments.Contains("demo")
-        || allowedEnvironments.Contains("qa")
-        || allowedEnvironments.Contains("prod");
+    // Demo mode: if the token omits or carries a non-standard environment claim, use fallback environment.
+    if (allowedEnvironments.Count == 0 || !allowedEnvironments.Overlaps(validEnvironments))
+    {
+        return validEnvironments.Contains(defaultEnvironment.Trim().ToLowerInvariant());
+    }
+
+    return true;
 }
 
 builder.Services
